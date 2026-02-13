@@ -78,12 +78,6 @@ export default function segmentLoader(
   const layoutDir = path.dirname(this.resourcePath);
   const segmentDir = path.relative(process.cwd(), layoutDir);
   const manifestPath = path.join(CACHE_DIR, segmentDir, 'manifest.json');
-  const outDir = path.dirname(manifestPath);
-  fs.mkdirSync(outDir, {recursive: true});
-  if (!fs.existsSync(manifestPath)) {
-    fs.writeFileSync(manifestPath, '{}');
-    logWithTimestamp('loader', `created request stub ${manifestPath}`);
-  }
   if (!isPopulated(manifestPath)) requestManifestGeneration(manifestPath);
 
   waitForManifest(manifestPath)
