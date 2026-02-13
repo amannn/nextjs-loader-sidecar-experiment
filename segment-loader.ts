@@ -106,44 +106,6 @@ function getManifestDependencyPaths(manifestSource: string): Array<string> {
   );
 }
 
-function getModifiedAt(filePath: string): number {
-  try {
-    return fs.statSync(filePath).mtimeMs;
-  } catch {
-    return 0;
-  }
-}
-
-function waitForFreshManifest(
-  manifestPath: string,
-  dependencyPaths: Array<string>
-): Promise<void> {
-  if (dependencyPaths.length === 0) return Promise.resolve();
-
-  return new Promise((resolve, reject) => {
-    const start = Date.now();
-    const check = () => {
-      let latestDependencyMtime = 0;
-      for (const dependencyPath of dependencyPaths) {
-        latestDependencyMtime = Math.max(
-          latestDependencyMtime,
-          getModifiedAt(dependencyPath)
-        );
-      }
-      const manifestMtime = getModifiedAt(manifestPath);
-      if (manifestMtime >= latestDependencyMtime) return resolve();
-      const elapsed = Date.now() - start;
-      if (elapsed > TIMEOUT) {
-        return reject(
-          new Error(`Manifest freshness timeout after ${elapsed}ms: ${manifestPath}`)
-        );
-      }
-      setTimeout(check, POLL_INTERVAL);
-    };
-    check();
-  });
-}
-
 function requestManifestGeneration(manifestPath: string): void {
   const requestMessage: ManifestRequestMessage = {
     force: true,
@@ -180,14 +142,11 @@ export default function segmentLoader(
     .then(() => {
       const manifestSource = fs.readFileSync(manifestPath, 'utf8');
       const dependencyPaths = getManifestDependencyPaths(manifestSource);
-      this.addDependency(manifestPath);
       for (const dependencyPath of dependencyPaths) {
         if (fs.existsSync(dependencyPath)) this.addDependency(dependencyPath);
         else this.addMissingDependency(dependencyPath);
       }
-      return waitForFreshManifest(manifestPath, dependencyPaths).then(() =>
-        fs.readFileSync(manifestPath, 'utf8')
-      );
+      return manifestSource;
     })
     .then((manifestSource) => {
       const result = source.replace(
