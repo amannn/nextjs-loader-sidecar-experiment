@@ -39,6 +39,11 @@ type SegmentManifest = {
   updatedAt: number;
 };
 
+type WatchEvent = {
+  path: string;
+  type: string;
+};
+
 const cachedFiles = new Map<string, CachedFile>();
 const fileToSegments = new Map<string, Set<string>>();
 const segmentDefinitions = new Map<string, SegmentDefinition>();
@@ -258,41 +263,63 @@ function getCachedFile(filePath: string): CachedFile {
   return cachedFile;
 }
 
-function collectLayouts(directoryPath: string, layoutPaths: Array<string>): void {
+function collectManifestPaths(
+  directoryPath: string,
+  manifestPaths: Array<string>
+): void {
+  if (!fs.existsSync(directoryPath)) return;
   const directoryEntries = fs.readdirSync(directoryPath, {withFileTypes: true});
   for (const directoryEntry of directoryEntries) {
     const fullPath = path.join(directoryPath, directoryEntry.name);
     if (directoryEntry.isDirectory()) {
-      collectLayouts(fullPath, layoutPaths);
+      collectManifestPaths(fullPath, manifestPaths);
       continue;
     }
-    if (directoryEntry.isFile() && directoryEntry.name === 'layout.tsx') {
-      layoutPaths.push(normalizeFilePath(fullPath));
+    if (directoryEntry.isFile() && directoryEntry.name === 'manifest.json') {
+      manifestPaths.push(normalizeFilePath(fullPath));
     }
   }
 }
 
-function discoverSegments(): Map<string, SegmentDefinition> {
-  const discoveredSegments = new Map<string, SegmentDefinition>();
-  if (!fs.existsSync(APP_DIR)) return discoveredSegments;
-
-  const layoutPaths: Array<string> = [];
-  collectLayouts(APP_DIR, layoutPaths);
-
-  for (const layoutPath of layoutPaths.sort()) {
-    const segmentDirectory = path.dirname(layoutPath);
-    const pagePath = normalizeFilePath(path.join(segmentDirectory, 'page.tsx'));
-    const entries = new Set<string>([layoutPath]);
-    if (fs.existsSync(pagePath)) entries.add(pagePath);
-    const segmentId = toPosixPath(path.relative(ROOT, segmentDirectory));
-
-    discoveredSegments.set(segmentId, {
-      entries: Array.from(entries).sort(),
-      id: segmentId
-    });
+function isManifestRequest(manifestPath: string): boolean {
+  if (!fs.existsSync(manifestPath)) return true;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    return !(typeof parsed === 'object' && parsed !== null && 'files' in parsed);
+  } catch {
+    return true;
   }
+}
 
-  return discoveredSegments;
+function getSegmentIdFromManifestPath(manifestPath: string): string | null {
+  const manifestDirectory = path.dirname(manifestPath);
+  const relativeDirectory = toPosixPath(path.relative(CACHE_DIR, manifestDirectory));
+  if (relativeDirectory.startsWith('..') || path.isAbsolute(relativeDirectory)) return null;
+  return relativeDirectory;
+}
+
+function getSegmentEntries(segmentId: string): Array<string> {
+  const segmentDirectory = path.join(ROOT, segmentId);
+  const entries = new Set<string>();
+  const layoutPath = normalizeFilePath(path.join(segmentDirectory, 'layout.tsx'));
+  const pagePath = normalizeFilePath(path.join(segmentDirectory, 'page.tsx'));
+  if (fs.existsSync(layoutPath)) entries.add(layoutPath);
+  if (fs.existsSync(pagePath)) entries.add(pagePath);
+  return Array.from(entries).sort();
+}
+
+function ensureSegmentDefinition(segmentId: string): SegmentDefinition | null {
+  const entries = getSegmentEntries(segmentId);
+  const hasLayoutEntry = entries.some(
+    (entryPath) => path.basename(entryPath) === 'layout.tsx'
+  );
+  if (!hasLayoutEntry) {
+    removeSegment(segmentId);
+    return null;
+  }
+  const segmentDefinition: SegmentDefinition = {entries, id: segmentId};
+  segmentDefinitions.set(segmentId, segmentDefinition);
+  return segmentDefinition;
 }
 
 function getManifestPath(segmentId: string): string {
@@ -388,22 +415,25 @@ function buildSegment(segmentDefinition: SegmentDefinition): void {
   writeManifest(segmentDefinition, visitedFiles, segmentDependencies);
 }
 
-function refreshAllSegments(): void {
-  const discoveredSegments = discoverSegments();
-  const removedSegments = new Set<string>(segmentDefinitions.keys());
+function buildSegmentForId(segmentId: string): void {
+  const segmentDefinition = ensureSegmentDefinition(segmentId);
+  if (!segmentDefinition) return;
+  buildSegment(segmentDefinition);
+}
 
-  for (const [segmentId, segmentDefinition] of discoveredSegments.entries()) {
-    segmentDefinitions.set(segmentId, segmentDefinition);
-    removedSegments.delete(segmentId);
-  }
+function processManifestRequest(manifestPath: string): void {
+  const normalizedManifestPath = normalizeFilePath(manifestPath);
+  if (path.basename(normalizedManifestPath) !== 'manifest.json') return;
+  if (!isManifestRequest(normalizedManifestPath)) return;
+  const segmentId = getSegmentIdFromManifestPath(normalizedManifestPath);
+  if (!segmentId) return;
+  buildSegmentForId(segmentId);
+}
 
-  for (const removedSegmentId of removedSegments) removeSegment(removedSegmentId);
-
-  const segmentIds = Array.from(discoveredSegments.keys()).sort();
-  for (const segmentId of segmentIds) {
-    const segmentDefinition = segmentDefinitions.get(segmentId);
-    if (segmentDefinition) buildSegment(segmentDefinition);
-  }
+function processPendingManifestRequests(): void {
+  const manifestPaths: Array<string> = [];
+  collectManifestPaths(CACHE_DIR, manifestPaths);
+  for (const manifestPath of manifestPaths.sort()) processManifestRequest(manifestPath);
 }
 
 function isEntryFile(filePath: string): boolean {
@@ -411,56 +441,89 @@ function isEntryFile(filePath: string): boolean {
   return ENTRY_FILENAMES.has(path.basename(filePath));
 }
 
+function getEntrySegmentId(filePath: string): string {
+  return toPosixPath(path.relative(ROOT, path.dirname(filePath)));
+}
+
+function rebuildAllActiveSegments(): void {
+  const segmentIds = Array.from(segmentDefinitions.keys()).sort();
+  for (const segmentId of segmentIds) buildSegmentForId(segmentId);
+}
+
 function rebuildImpactedSegments(filePaths: Set<string>): void {
   const impactedSegments = new Set<string>();
   for (const filePath of filePaths) {
     const segments = fileToSegments.get(filePath);
-    if (!segments) continue;
-    for (const segmentId of segments) impactedSegments.add(segmentId);
+    if (segments) {
+      for (const segmentId of segments) impactedSegments.add(segmentId);
+    }
+    if (isEntryFile(filePath)) {
+      const entrySegmentId = getEntrySegmentId(filePath);
+      if (segmentDefinitions.has(entrySegmentId)) impactedSegments.add(entrySegmentId);
+    }
   }
 
   const sortedImpactedSegments = Array.from(impactedSegments).sort();
-  for (const segmentId of sortedImpactedSegments) {
-    const segmentDefinition = segmentDefinitions.get(segmentId);
-    if (segmentDefinition) buildSegment(segmentDefinition);
-  }
+  for (const segmentId of sortedImpactedSegments) buildSegmentForId(segmentId);
 }
 
-function handleSourceEvents(events: Array<{path: string; type: string}>): void {
+function handleSourceEvents(events: Array<WatchEvent>): void {
   if (events.length === 0) return;
 
-  let shouldRefreshAll = false;
+  let hasCreateOrDelete = false;
   const changedFiles = new Set<string>();
 
   for (const event of events) {
     const changedFilePath = normalizeFilePath(event.path);
     changedFiles.add(changedFilePath);
     cachedFiles.delete(changedFilePath);
-    if (event.type === 'create' || event.type === 'delete') shouldRefreshAll = true;
-    if (isEntryFile(changedFilePath)) shouldRefreshAll = true;
+    if (event.type === 'create' || event.type === 'delete') hasCreateOrDelete = true;
   }
 
-  if (shouldRefreshAll) {
-    refreshAllSegments();
+  if (hasCreateOrDelete) {
+    rebuildAllActiveSegments();
     return;
   }
 
   rebuildImpactedSegments(changedFiles);
 }
 
+function handleManifestEvents(events: Array<WatchEvent>): void {
+  if (events.length === 0) return;
+  for (const event of events) {
+    if (event.type !== 'create' && event.type !== 'update') continue;
+    processManifestRequest(event.path);
+  }
+}
+
 async function run() {
   fs.mkdirSync(CACHE_DIR, {recursive: true});
-  refreshAllSegments();
-  if (process.argv.includes('--once')) return;
-  if (!fs.existsSync(SRC_DIR)) return;
+  processPendingManifestRequests();
+  if (process.argv.includes('--once')) {
+    return;
+  }
 
-  const subscription = await watcher.subscribe(SRC_DIR, (error, events) => {
+  const subscriptions: Array<{unsubscribe: () => Promise<void> | void}> = [];
+
+  const cacheSubscription = await watcher.subscribe(CACHE_DIR, (error, events) => {
     if (error) throw error;
-    handleSourceEvents(events as Array<{path: string; type: string}>);
+    handleManifestEvents(events as Array<WatchEvent>);
   });
+  subscriptions.push(cacheSubscription);
 
-  process.on('SIGINT', () => subscription.unsubscribe());
-  process.on('SIGTERM', () => subscription.unsubscribe());
+  if (fs.existsSync(SRC_DIR)) {
+    const sourceSubscription = await watcher.subscribe(SRC_DIR, (error, events) => {
+      if (error) throw error;
+      handleSourceEvents(events as Array<WatchEvent>);
+    });
+    subscriptions.push(sourceSubscription);
+  }
+
+  const stop = () => {
+    for (const subscription of subscriptions) void subscription.unsubscribe();
+  };
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
 }
 
 run().catch((runError) => {
