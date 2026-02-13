@@ -14,11 +14,10 @@ type ManifestRequestMessage = {
   type: 'segment-manifest-request';
 };
 
-function toImportPath(fromDirectory: string, filePath: string): string {
-  const relativePath = path.relative(fromDirectory, filePath).replace(/\\/g, '/');
-  if (relativePath.startsWith('.')) return relativePath;
-  return `./${relativePath}`;
-}
+type SegmentManifest = {
+  entries: Array<string>;
+  files: Record<string, unknown>;
+};
 
 function logWithTimestamp(scope: string, message: string): void {
   if (!DEBUG_MODE) return;
@@ -47,6 +46,95 @@ function waitForManifest(manifestPath: string): Promise<void> {
       if (elapsed > TIMEOUT) {
         return reject(
           new Error(`Manifest timeout after ${elapsed}ms: ${manifestPath}`)
+        );
+      }
+      setTimeout(check, POLL_INTERVAL);
+    };
+    check();
+  });
+}
+
+function parseManifestSource(manifestSource: string): SegmentManifest | null {
+  try {
+    const parsedManifest = JSON.parse(manifestSource) as unknown;
+    if (
+      typeof parsedManifest !== 'object' ||
+      parsedManifest === null ||
+      !('files' in parsedManifest) ||
+      !('entries' in parsedManifest)
+    ) {
+      return null;
+    }
+    const parsedManifestRecord = parsedManifest as Record<string, unknown>;
+    if (
+      !Array.isArray(parsedManifestRecord.entries) ||
+      typeof parsedManifestRecord.files !== 'object' ||
+      parsedManifestRecord.files === null
+    ) {
+      return null;
+    }
+    return parsedManifest as SegmentManifest;
+  } catch {
+    return null;
+  }
+}
+
+function resolveProjectFilePath(relativeFilePath: string): string | null {
+  if (path.isAbsolute(relativeFilePath)) return null;
+  const normalizedPath = path.normalize(relativeFilePath);
+  if (normalizedPath.startsWith('..')) return null;
+  return path.join(process.cwd(), normalizedPath);
+}
+
+function getManifestDependencyPaths(manifestSource: string): Array<string> {
+  const parsedManifest = parseManifestSource(manifestSource);
+  if (!parsedManifest) return [];
+
+  const dependencyPaths = new Set<string>();
+  for (const entryPath of parsedManifest.entries) {
+    const resolvedPath = resolveProjectFilePath(entryPath);
+    if (resolvedPath) dependencyPaths.add(resolvedPath);
+  }
+  for (const filePath of Object.keys(parsedManifest.files)) {
+    const resolvedPath = resolveProjectFilePath(filePath);
+    if (resolvedPath) dependencyPaths.add(resolvedPath);
+  }
+
+  return Array.from(dependencyPaths).sort((leftPath, rightPath) =>
+    leftPath.localeCompare(rightPath)
+  );
+}
+
+function getModifiedAt(filePath: string): number {
+  try {
+    return fs.statSync(filePath).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+function waitForFreshManifest(
+  manifestPath: string,
+  dependencyPaths: Array<string>
+): Promise<void> {
+  if (dependencyPaths.length === 0) return Promise.resolve();
+
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const check = () => {
+      let latestDependencyMtime = 0;
+      for (const dependencyPath of dependencyPaths) {
+        latestDependencyMtime = Math.max(
+          latestDependencyMtime,
+          getModifiedAt(dependencyPath)
+        );
+      }
+      const manifestMtime = getModifiedAt(manifestPath);
+      if (manifestMtime >= latestDependencyMtime) return resolve();
+      const elapsed = Date.now() - start;
+      if (elapsed > TIMEOUT) {
+        return reject(
+          new Error(`Manifest freshness timeout after ${elapsed}ms: ${manifestPath}`)
         );
       }
       setTimeout(check, POLL_INTERVAL);
@@ -84,17 +172,26 @@ export default function segmentLoader(
   const layoutDir = path.dirname(this.resourcePath);
   const segmentDir = path.relative(process.cwd(), layoutDir);
   const manifestPath = path.join(CACHE_DIR, segmentDir, 'manifest.json');
-  const manifestImportPath = toImportPath(layoutDir, manifestPath);
   if (!isPopulated(manifestPath)) requestManifestGeneration(manifestPath);
 
   waitForManifest(manifestPath)
     .then(() => {
+      const manifestSource = fs.readFileSync(manifestPath, 'utf8');
+      const dependencyPaths = getManifestDependencyPaths(manifestSource);
       this.addDependency(manifestPath);
-      const renderSource = source.replace(
-        '  {children}',
-        '  <pre>{JSON.stringify(__segmentManifest, null, 2)}</pre>{children}'
+      for (const dependencyPath of dependencyPaths) {
+        if (fs.existsSync(dependencyPath)) this.addDependency(dependencyPath);
+        else this.addMissingDependency(dependencyPath);
+      }
+      return waitForFreshManifest(manifestPath, dependencyPaths).then(() =>
+        fs.readFileSync(manifestPath, 'utf8')
       );
-      const result = `import __segmentManifest from '${manifestImportPath}';\n${renderSource}`;
+    })
+    .then((manifestSource) => {
+      const result = source.replace(
+        '  {children}',
+        `<pre>{\`${manifestSource}\`}</pre>{children}`
+      );
       logWithTimestamp('loader', `manifest ready ${manifestPath}`);
       callback(null, result);
     })
