@@ -19,7 +19,7 @@ if (
 const nextConfig: NextConfig = {
   turbopack: {
     rules: {
-      'layout.tsx': {
+      '**/layout.tsx': {
         loaders: [
           {
             loader: './layout-loader.ts'
