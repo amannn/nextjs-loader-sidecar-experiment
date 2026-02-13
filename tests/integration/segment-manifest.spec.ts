@@ -65,11 +65,6 @@ async function waitForManifest(manifestPath: string): Promise<SegmentManifest> {
   throw new Error(`Timed out waiting for manifest: ${manifestPath}`);
 }
 
-async function resetManifests(): Promise<void> {
-  await fs.rm(rootManifestPath, {force: true});
-  await fs.rm(testManifestPath, {force: true});
-}
-
 test.describe.configure({mode: 'serial'});
 
 test('Dev startup clears cache marker', async () => {
@@ -77,7 +72,7 @@ test('Dev startup clears cache marker', async () => {
 });
 
 test('Rendering / writes only root manifest', async ({request}) => {
-  await resetManifests();
+  await fs.rm(testManifestPath, {force: true});
 
   const response = await request.get('/');
   expect(response.ok()).toBe(true);
