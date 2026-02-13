@@ -4,8 +4,10 @@ import path from 'node:path';
 
 const devPort = process.env.PLAYWRIGHT_DEV_PORT ?? '3100';
 const cacheDir = path.join(process.cwd(), 'node_modules', '.cache', 'test');
+const nextDir = path.join(process.cwd(), '.next');
 const startupMarkerPath = path.join(cacheDir, 'startup-stale-marker.txt');
 
+fs.rmSync(nextDir, {force: true, recursive: true});
 fs.mkdirSync(cacheDir, {recursive: true});
 fs.writeFileSync(startupMarkerPath, `stale:${Date.now()}\n`, 'utf8');
 
