@@ -2,7 +2,7 @@ name: Integration tests
 
 on:
   pull_request:
-  push:
+    types: [opened, synchronize, reopened]
 
 jobs:
   integration:
@@ -17,6 +17,7 @@ jobs:
         uses: pnpm/action-setup@v4
         with:
           run_install: false
+          version: 10.29.3
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
