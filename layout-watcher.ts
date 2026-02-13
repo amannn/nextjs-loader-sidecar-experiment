@@ -23,6 +23,7 @@ const DEBUG_MODE = process.env.SEGMENT_MANIFEST_DEBUG === '1';
 type CachedFile = {
   imports: Array<string>;
   lines: number;
+  modifiedAt: number;
 };
 
 type SegmentDefinition = {
@@ -271,10 +272,12 @@ function resolveImportPath(
 function getCachedFile(filePath: string): CachedFile {
   const normalizedPath = normalizeFilePath(filePath);
   const cached = cachedFiles.get(normalizedPath);
-  if (cached) return cached;
+  const sourceExists = fs.existsSync(normalizedPath);
+  const modifiedAt = sourceExists ? fs.statSync(normalizedPath).mtimeMs : 0;
+  if (cached && cached.modifiedAt === modifiedAt) return cached;
 
-  if (!fs.existsSync(normalizedPath)) {
-    const missingFile: CachedFile = {imports: [], lines: 0};
+  if (!sourceExists) {
+    const missingFile: CachedFile = {imports: [], lines: 0, modifiedAt: 0};
     cachedFiles.set(normalizedPath, missingFile);
     return missingFile;
   }
@@ -290,7 +293,8 @@ function getCachedFile(filePath: string): CachedFile {
 
   const cachedFile: CachedFile = {
     imports: Array.from(resolvedImports).sort(),
-    lines: countLines(sourceCode)
+    lines: countLines(sourceCode),
+    modifiedAt
   };
   cachedFiles.set(normalizedPath, cachedFile);
   return cachedFile;
