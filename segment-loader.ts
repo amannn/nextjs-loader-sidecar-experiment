@@ -4,7 +4,7 @@ import {requestManifestBuild} from './layout-watcher.ts';
 import type {TurbopackLoaderContext} from './types.ts';
 
 const CACHE_DIR = path.join(process.cwd(), 'node_modules/.cache/test');
-const POLL_INTERVAL = 20;
+const POLL_INTERVAL = 10;
 const TIMEOUT = 10000;
 const DEBUG_LOG_PATH = '/tmp/segment-manifest.log';
 const DEBUG_MODE = process.env.SEGMENT_MANIFEST_DEBUG === '1';
@@ -83,12 +83,10 @@ export default function segmentLoader(
   waitForManifest(manifestPath)
     .then(() => {
       const manifestSource = fs.readFileSync(manifestPath, 'utf8');
-      const result = `
-const manifest = ${manifestSource};
-console.log(manifest);
-
-${source}
-`;
+      const result = source.replace(
+        '  {children}',
+        `<pre>{\`${manifestSource}\`}</pre>{children}`
+      );
       logWithTimestamp('loader', `manifest ready ${manifestPath}`);
       callback(null, result);
     })
