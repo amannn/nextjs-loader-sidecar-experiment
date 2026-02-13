@@ -20,7 +20,7 @@ const nextConfig: NextConfig = {
       '**/layout.tsx': {
         loaders: [
           {
-            loader: './segment-loader.ts'
+            loader: './segment-loader-v2.ts'
           }
         ]
       }
