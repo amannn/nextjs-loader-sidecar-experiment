@@ -10,8 +10,14 @@ const DEBUG_LOG_PATH = '/tmp/segment-manifest.log';
 const DEBUG_MODE = process.env.SEGMENT_MANIFEST_DEBUG === '1';
 
 type ManifestRequestMessage = {
+  force: boolean;
   manifestPath: string;
   type: 'segment-manifest-request';
+};
+
+type SegmentManifest = {
+  entries: Array<string>;
+  files: Record<string, unknown>;
 };
 
 function logWithTimestamp(scope: string, message: string): void {
@@ -49,8 +55,60 @@ function waitForManifest(manifestPath: string): Promise<void> {
   });
 }
 
+function parseManifestSource(manifestSource: string): SegmentManifest | null {
+  try {
+    const parsedManifest = JSON.parse(manifestSource) as unknown;
+    if (
+      typeof parsedManifest !== 'object' ||
+      parsedManifest === null ||
+      !('files' in parsedManifest) ||
+      !('entries' in parsedManifest)
+    ) {
+      return null;
+    }
+    const parsedManifestRecord = parsedManifest as Record<string, unknown>;
+    if (
+      !Array.isArray(parsedManifestRecord.entries) ||
+      typeof parsedManifestRecord.files !== 'object' ||
+      parsedManifestRecord.files === null
+    ) {
+      return null;
+    }
+    return parsedManifest as SegmentManifest;
+  } catch {
+    return null;
+  }
+}
+
+function resolveProjectFilePath(relativeFilePath: string): string | null {
+  if (path.isAbsolute(relativeFilePath)) return null;
+  const normalizedPath = path.normalize(relativeFilePath);
+  if (normalizedPath.startsWith('..')) return null;
+  return path.join(process.cwd(), normalizedPath);
+}
+
+function getManifestDependencyPaths(manifestSource: string): Array<string> {
+  const parsedManifest = parseManifestSource(manifestSource);
+  if (!parsedManifest) return [];
+
+  const dependencyPaths = new Set<string>();
+  for (const entryPath of parsedManifest.entries) {
+    const resolvedPath = resolveProjectFilePath(entryPath);
+    if (resolvedPath) dependencyPaths.add(resolvedPath);
+  }
+  for (const filePath of Object.keys(parsedManifest.files)) {
+    const resolvedPath = resolveProjectFilePath(filePath);
+    if (resolvedPath) dependencyPaths.add(resolvedPath);
+  }
+
+  return Array.from(dependencyPaths).sort((leftPath, rightPath) =>
+    leftPath.localeCompare(rightPath)
+  );
+}
+
 function requestManifestGeneration(manifestPath: string): void {
   const requestMessage: ManifestRequestMessage = {
+    force: true,
     manifestPath,
     type: 'segment-manifest-request'
   };
@@ -78,11 +136,19 @@ export default function segmentLoader(
   const layoutDir = path.dirname(this.resourcePath);
   const segmentDir = path.relative(process.cwd(), layoutDir);
   const manifestPath = path.join(CACHE_DIR, segmentDir, 'manifest.json');
-  if (!isPopulated(manifestPath)) requestManifestGeneration(manifestPath);
+  requestManifestGeneration(manifestPath);
 
   waitForManifest(manifestPath)
     .then(() => {
       const manifestSource = fs.readFileSync(manifestPath, 'utf8');
+      const dependencyPaths = getManifestDependencyPaths(manifestSource);
+      for (const dependencyPath of dependencyPaths) {
+        if (fs.existsSync(dependencyPath)) this.addDependency(dependencyPath);
+        else this.addMissingDependency(dependencyPath);
+      }
+      return manifestSource;
+    })
+    .then((manifestSource) => {
       const result = source.replace(
         '  {children}',
         `<pre>{\`${manifestSource}\`}</pre>{children}`

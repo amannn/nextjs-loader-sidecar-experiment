@@ -23,6 +23,7 @@ const DEBUG_MODE = process.env.SEGMENT_MANIFEST_DEBUG === '1';
 type CachedFile = {
   imports: Array<string>;
   lines: number;
+  modifiedAt: number;
 };
 
 type SegmentDefinition = {
@@ -48,6 +49,7 @@ type WatchEvent = {
 };
 
 type ManifestRequestMessage = {
+  force?: boolean;
   manifestPath: string;
   type: 'segment-manifest-request';
 };
@@ -76,9 +78,12 @@ function toPosixPath(filePath: string): string {
 function isManifestRequestMessage(message: unknown): message is ManifestRequestMessage {
   if (!message || typeof message !== 'object') return false;
   const messageRecord = message as Record<string, unknown>;
+  const hasValidForce =
+    !('force' in messageRecord) || typeof messageRecord.force === 'boolean';
   return (
     messageRecord.type === 'segment-manifest-request' &&
-    typeof messageRecord.manifestPath === 'string'
+    typeof messageRecord.manifestPath === 'string' &&
+    hasValidForce
   );
 }
 
@@ -267,10 +272,12 @@ function resolveImportPath(
 function getCachedFile(filePath: string): CachedFile {
   const normalizedPath = normalizeFilePath(filePath);
   const cached = cachedFiles.get(normalizedPath);
-  if (cached) return cached;
+  const sourceExists = fs.existsSync(normalizedPath);
+  const modifiedAt = sourceExists ? fs.statSync(normalizedPath).mtimeMs : 0;
+  if (cached && cached.modifiedAt === modifiedAt) return cached;
 
-  if (!fs.existsSync(normalizedPath)) {
-    const missingFile: CachedFile = {imports: [], lines: 0};
+  if (!sourceExists) {
+    const missingFile: CachedFile = {imports: [], lines: 0, modifiedAt: 0};
     cachedFiles.set(normalizedPath, missingFile);
     return missingFile;
   }
@@ -286,7 +293,8 @@ function getCachedFile(filePath: string): CachedFile {
 
   const cachedFile: CachedFile = {
     imports: Array.from(resolvedImports).sort(),
-    lines: countLines(sourceCode)
+    lines: countLines(sourceCode),
+    modifiedAt
   };
   cachedFiles.set(normalizedPath, cachedFile);
   return cachedFile;
@@ -457,10 +465,10 @@ function buildSegmentForId(segmentId: string): void {
   buildSegment(segmentDefinition);
 }
 
-function processManifestRequest(manifestPath: string): void {
+function processManifestRequest(manifestPath: string, forceBuild = false): void {
   const normalizedManifestPath = normalizeFilePath(manifestPath);
   if (path.basename(normalizedManifestPath) !== 'manifest.json') return;
-  if (!isManifestRequest(normalizedManifestPath)) return;
+  if (!forceBuild && !isManifestRequest(normalizedManifestPath)) return;
   const segmentId = getSegmentIdFromManifestPath(normalizedManifestPath);
   if (!segmentId) return;
   logWithTimestamp('watcher', `process request ${normalizedManifestPath}`);
@@ -468,7 +476,7 @@ function processManifestRequest(manifestPath: string): void {
 }
 
 export function requestManifestBuild(manifestPath: string): void {
-  processManifestRequest(manifestPath);
+  processManifestRequest(manifestPath, true);
 }
 
 function processPendingManifestRequests(): void {
@@ -543,7 +551,7 @@ function bindIpcListener(): void {
   process.on('message', (message: unknown) => {
     if (!isManifestRequestMessage(message)) return;
     logWithTimestamp('watcher', `ipc request ${message.manifestPath}`);
-    processManifestRequest(message.manifestPath);
+    processManifestRequest(message.manifestPath, message.force === true);
   });
 }
 
