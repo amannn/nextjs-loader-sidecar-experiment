@@ -10,7 +10,7 @@ function isPopulated(manifestPath: string): boolean {
   try {
     const content = fs.readFileSync(manifestPath, 'utf8');
     const parsed = JSON.parse(content);
-    return 'path' in parsed || 'count' in parsed;
+    return typeof parsed === 'object' && parsed !== null && 'files' in parsed;
   } catch {
     return false;
   }
