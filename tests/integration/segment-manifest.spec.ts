@@ -194,10 +194,11 @@ test('Removing a segment dependency updates rendered manifest files', async ({pa
   const pagePath = path.join(process.cwd(), 'src', 'app', 'test', 'page.tsx');
   const originalPageSource = await fs.readFile(pagePath, 'utf8');
   const updatedPageSource = originalPageSource
-    .replace("import Comp from './Comp';\n\n", '')
+    .replace("import Comp from './Comp';", '')
     .replace('      <Comp />', '      <p>No comp</p>');
 
   expect(updatedPageSource).not.toBe(originalPageSource);
+  expect(updatedPageSource).not.toContain("import Comp from './Comp';");
 
   await page.goto('/test');
   await expect(page.getByRole('heading', {name: 'Test Page'})).toBeVisible();
