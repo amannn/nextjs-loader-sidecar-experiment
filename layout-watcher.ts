@@ -498,8 +498,8 @@ function handleManifestEvents(events: Array<WatchEvent>): void {
 
 async function run() {
   fs.mkdirSync(CACHE_DIR, {recursive: true});
-  processPendingManifestRequests();
   if (process.argv.includes('--once')) {
+    processPendingManifestRequests();
     return;
   }
 
@@ -510,6 +510,7 @@ async function run() {
     handleManifestEvents(events as Array<WatchEvent>);
   });
   subscriptions.push(cacheSubscription);
+  processPendingManifestRequests();
 
   if (fs.existsSync(SRC_DIR)) {
     const sourceSubscription = await watcher.subscribe(SRC_DIR, (error, events) => {
