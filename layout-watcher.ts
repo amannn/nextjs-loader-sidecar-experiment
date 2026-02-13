@@ -3,6 +3,7 @@ import {parseSync} from '@swc/core';
 import fs from 'fs';
 import {builtinModules, createRequire} from 'module';
 import path from 'path';
+import {fileURLToPath} from 'url';
 
 const ROOT = process.cwd();
 const SRC_DIR = path.join(ROOT, 'src');
@@ -46,10 +47,19 @@ type WatchEvent = {
   type: string;
 };
 
+type ManifestRequestMessage = {
+  manifestPath: string;
+  type: 'segment-manifest-request';
+};
+
 const cachedFiles = new Map<string, CachedFile>();
 const fileToSegments = new Map<string, Set<string>>();
 const segmentDefinitions = new Map<string, SegmentDefinition>();
 const segmentToFiles = new Map<string, Set<string>>();
+let watcherStarted = false;
+let stopSignalsBound = false;
+let ipcListenerBound = false;
+let subscriptions: Array<{unsubscribe: () => Promise<void> | void}> = [];
 
 function logWithTimestamp(scope: string, message: string): void {
   if (!DEBUG_MODE) return;
@@ -61,6 +71,15 @@ function logWithTimestamp(scope: string, message: string): void {
 
 function toPosixPath(filePath: string): string {
   return filePath.replace(/\\/g, '/');
+}
+
+function isManifestRequestMessage(message: unknown): message is ManifestRequestMessage {
+  if (!message || typeof message !== 'object') return false;
+  const messageRecord = message as Record<string, unknown>;
+  return (
+    messageRecord.type === 'segment-manifest-request' &&
+    typeof messageRecord.manifestPath === 'string'
+  );
 }
 
 function normalizeFilePath(filePath: string): string {
@@ -448,6 +467,10 @@ function processManifestRequest(manifestPath: string): void {
   buildSegmentForId(segmentId);
 }
 
+export function requestManifestBuild(manifestPath: string): void {
+  processManifestRequest(manifestPath);
+}
+
 function processPendingManifestRequests(): void {
   const manifestPaths: Array<string> = [];
   collectManifestPaths(CACHE_DIR, manifestPaths);
@@ -514,7 +537,63 @@ function handleManifestEvents(events: Array<WatchEvent>): void {
   }
 }
 
-async function run() {
+function bindIpcListener(): void {
+  if (ipcListenerBound) return;
+  ipcListenerBound = true;
+  process.on('message', (message: unknown) => {
+    if (!isManifestRequestMessage(message)) return;
+    logWithTimestamp('watcher', `ipc request ${message.manifestPath}`);
+    processManifestRequest(message.manifestPath);
+  });
+}
+
+function stopWatcher(): void {
+  for (const subscription of subscriptions) void subscription.unsubscribe();
+  subscriptions = [];
+  watcherStarted = false;
+}
+
+function bindStopSignals(): void {
+  if (stopSignalsBound) return;
+  stopSignalsBound = true;
+  process.on('SIGINT', stopWatcher);
+  process.on('SIGTERM', stopWatcher);
+}
+
+export async function startWatcher(): Promise<void> {
+  if (watcherStarted) return;
+  watcherStarted = true;
+  logWithTimestamp('watcher', 'start subscriptions');
+  fs.mkdirSync(CACHE_DIR, {recursive: true});
+
+  bindIpcListener();
+  bindStopSignals();
+
+  try {
+    const cacheSubscription = await watcher.subscribe(CACHE_DIR, (error, events) => {
+      if (error) throw error;
+      handleManifestEvents(events as Array<WatchEvent>);
+    });
+    subscriptions.push(cacheSubscription);
+    processPendingManifestRequests();
+
+    if (fs.existsSync(SRC_DIR)) {
+      const sourceSubscription = await watcher.subscribe(
+        SRC_DIR,
+        (error, events) => {
+          if (error) throw error;
+          handleSourceEvents(events as Array<WatchEvent>);
+        }
+      );
+      subscriptions.push(sourceSubscription);
+    }
+  } catch (watcherError) {
+    watcherStarted = false;
+    throw watcherError;
+  }
+}
+
+async function runCli(): Promise<void> {
   logWithTimestamp('watcher', `start args=${process.argv.slice(2).join(' ')}`);
   fs.mkdirSync(CACHE_DIR, {recursive: true});
   const requestedManifestPath = readFlagValue('--manifest');
@@ -527,31 +606,14 @@ async function run() {
     return;
   }
 
-  const subscriptions: Array<{unsubscribe: () => Promise<void> | void}> = [];
-
-  const cacheSubscription = await watcher.subscribe(CACHE_DIR, (error, events) => {
-    if (error) throw error;
-    handleManifestEvents(events as Array<WatchEvent>);
-  });
-  subscriptions.push(cacheSubscription);
-  processPendingManifestRequests();
-
-  if (fs.existsSync(SRC_DIR)) {
-    const sourceSubscription = await watcher.subscribe(SRC_DIR, (error, events) => {
-      if (error) throw error;
-      handleSourceEvents(events as Array<WatchEvent>);
-    });
-    subscriptions.push(sourceSubscription);
-  }
-
-  const stop = () => {
-    for (const subscription of subscriptions) void subscription.unsubscribe();
-  };
-  process.on('SIGINT', stop);
-  process.on('SIGTERM', stop);
+  await startWatcher();
 }
 
-run().catch((runError) => {
-  console.error(runError);
-  process.exitCode = 1;
-});
+const modulePath = fileURLToPath(import.meta.url);
+const scriptPath = process.argv[1] ? path.resolve(process.argv[1]) : null;
+if (scriptPath && scriptPath === modulePath) {
+  runCli().catch((runError) => {
+    console.error(runError);
+    process.exitCode = 1;
+  });
+}
