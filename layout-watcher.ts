@@ -16,6 +16,8 @@ const NODE_BUILTINS = new Set([
   ...builtinModules.map((builtinModule) => `node:${builtinModule}`)
 ]);
 const runtimeRequire = createRequire(path.join(ROOT, 'package.json'));
+const DEBUG_LOG_PATH = '/tmp/segment-manifest.log';
+const DEBUG_MODE = process.env.SEGMENT_MANIFEST_DEBUG === '1';
 
 type CachedFile = {
   imports: Array<string>;
@@ -48,6 +50,14 @@ const cachedFiles = new Map<string, CachedFile>();
 const fileToSegments = new Map<string, Set<string>>();
 const segmentDefinitions = new Map<string, SegmentDefinition>();
 const segmentToFiles = new Map<string, Set<string>>();
+
+function logWithTimestamp(scope: string, message: string): void {
+  if (!DEBUG_MODE) return;
+  fs.appendFileSync(
+    DEBUG_LOG_PATH,
+    `${new Date().toISOString()} [${scope}] ${message}\n`
+  );
+}
 
 function toPosixPath(filePath: string): string {
   return filePath.replace(/\\/g, '/');
@@ -326,6 +336,12 @@ function getManifestPath(segmentId: string): string {
   return path.join(CACHE_DIR, segmentId, 'manifest.json');
 }
 
+function readFlagValue(flag: string): string | null {
+  const flagIndex = process.argv.indexOf(flag);
+  if (flagIndex < 0 || flagIndex >= process.argv.length - 1) return null;
+  return process.argv[flagIndex + 1] ?? null;
+}
+
 function clearSegmentMembership(segmentId: string): void {
   const segmentFiles = segmentToFiles.get(segmentId);
   if (!segmentFiles) return;
@@ -383,6 +399,7 @@ function writeManifest(
   const manifestPath = getManifestPath(segmentDefinition.id);
   fs.mkdirSync(path.dirname(manifestPath), {recursive: true});
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+  logWithTimestamp('watcher', `wrote manifest ${manifestPath}`);
 }
 
 function buildSegment(segmentDefinition: SegmentDefinition): void {
@@ -427,6 +444,7 @@ function processManifestRequest(manifestPath: string): void {
   if (!isManifestRequest(normalizedManifestPath)) return;
   const segmentId = getSegmentIdFromManifestPath(normalizedManifestPath);
   if (!segmentId) return;
+  logWithTimestamp('watcher', `process request ${normalizedManifestPath}`);
   buildSegmentForId(segmentId);
 }
 
@@ -497,8 +515,14 @@ function handleManifestEvents(events: Array<WatchEvent>): void {
 }
 
 async function run() {
+  logWithTimestamp('watcher', `start args=${process.argv.slice(2).join(' ')}`);
   fs.mkdirSync(CACHE_DIR, {recursive: true});
+  const requestedManifestPath = readFlagValue('--manifest');
   if (process.argv.includes('--once')) {
+    if (requestedManifestPath) {
+      processManifestRequest(requestedManifestPath);
+      return;
+    }
     processPendingManifestRequests();
     return;
   }
