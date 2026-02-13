@@ -189,3 +189,111 @@ test('Editing a file updates rendered manifest automatically', async ({page}) =>
     await fs.writeFile(componentPath, originalComponentSource, 'utf8');
   }
 });
+
+test('Removing a segment dependency updates rendered manifest files', async ({page}) => {
+  const pagePath = path.join(process.cwd(), 'src', 'app', 'test', 'page.tsx');
+  const originalPageSource = await fs.readFile(pagePath, 'utf8');
+  const updatedPageSource = originalPageSource
+    .replace("import Comp from './Comp';\n\n", '')
+    .replace('      <Comp />', '      <p>No comp</p>');
+
+  expect(updatedPageSource).not.toBe(originalPageSource);
+
+  await page.goto('/test');
+  await expect(page.getByRole('heading', {name: 'Test Page'})).toBeVisible();
+
+  const initialManifest = await waitForRenderedManifest(page, 'src/app/test');
+  expect(initialManifest.files['src/app/test/Comp.tsx']).toBeDefined();
+
+  try {
+    await fs.writeFile(pagePath, updatedPageSource, 'utf8');
+    const updatedManifest = await waitForRenderedManifestUpdate(
+      page,
+      'src/app/test',
+      initialManifest.updatedAt
+    );
+    expect(updatedManifest.files['src/app/test/Comp.tsx']).toBeUndefined();
+    await expect(page.getByText('No comp')).toBeVisible();
+  } finally {
+    await fs.writeFile(pagePath, originalPageSource, 'utf8');
+  }
+});
+
+test('Adding a segment dependency updates rendered manifest files', async ({page}) => {
+  const pagePath = path.join(process.cwd(), 'src', 'app', 'test', 'page.tsx');
+  const addedComponentPath = path.join(
+    process.cwd(),
+    'src',
+    'app',
+    'test',
+    'ManifestAddedComp.tsx'
+  );
+  const originalPageSource = await fs.readFile(pagePath, 'utf8');
+  const updatedPageSource = originalPageSource
+    .replace(
+      "import Comp from './Comp';",
+      "import Comp from './Comp';\nimport ManifestAddedComp from './ManifestAddedComp';"
+    )
+    .replace('      <Comp />', '      <Comp />\n      <ManifestAddedComp />');
+  const addedComponentSource = `export default function ManifestAddedComp() {
+  return (
+    <div>
+      <h2>Manifest added component</h2>
+    </div>
+  );
+}
+`;
+
+  expect(updatedPageSource).not.toBe(originalPageSource);
+
+  await fs.rm(addedComponentPath, {force: true});
+  await page.goto('/test');
+  await expect(page.getByRole('heading', {name: 'Test Page'})).toBeVisible();
+
+  const initialManifest = await waitForRenderedManifest(page, 'src/app/test');
+  expect(initialManifest.files['src/app/test/ManifestAddedComp.tsx']).toBeUndefined();
+
+  try {
+    await fs.writeFile(addedComponentPath, addedComponentSource, 'utf8');
+    await fs.writeFile(pagePath, updatedPageSource, 'utf8');
+    const updatedManifest = await waitForRenderedManifestUpdate(
+      page,
+      'src/app/test',
+      initialManifest.updatedAt
+    );
+    expect(updatedManifest.files['src/app/test/ManifestAddedComp.tsx']).toBeDefined();
+    await expect(page.getByRole('heading', {name: 'Manifest added component'})).toBeVisible();
+  } finally {
+    await fs.writeFile(pagePath, originalPageSource, 'utf8');
+    await fs.rm(addedComponentPath, {force: true});
+  }
+});
+
+test('Editing a root segment file updates rendered root manifest', async ({page}) => {
+  const rootPagePath = path.join(process.cwd(), 'src', 'app', 'page.tsx');
+  const originalRootPageSource = await fs.readFile(rootPagePath, 'utf8');
+  const markerText = `Hello world manifest marker ${Date.now()}`;
+  const updatedRootPageSource = originalRootPageSource.replace(
+    'Hello world!',
+    markerText
+  );
+
+  expect(updatedRootPageSource).not.toBe(originalRootPageSource);
+
+  await page.goto('/test');
+  await expect(page.getByRole('heading', {name: 'Test Page'})).toBeVisible();
+
+  const initialRootManifest = await waitForRenderedManifest(page, 'src/app');
+
+  try {
+    await fs.writeFile(rootPagePath, updatedRootPageSource, 'utf8');
+    const updatedRootManifest = await waitForRenderedManifestUpdate(
+      page,
+      'src/app',
+      initialRootManifest.updatedAt
+    );
+    expect(updatedRootManifest.updatedAt).toBeGreaterThan(initialRootManifest.updatedAt);
+  } finally {
+    await fs.writeFile(rootPagePath, originalRootPageSource, 'utf8');
+  }
+});
