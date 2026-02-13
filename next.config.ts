@@ -1,17 +1,10 @@
-import {spawn} from 'child_process';
-import path from 'path';
+import {startWatcher} from './layout-watcher.ts';
 import type {NextConfig} from 'next';
 
-if (
-  process.env.NODE_ENV === 'development' &&
-  !process.env.LAYOUT_WATCHER_STARTED
-) {
-  process.env.LAYOUT_WATCHER_STARTED = '1';
-  spawn('node', [path.join(process.cwd(), 'layout-watcher.ts')], {
-    detached: true,
-    stdio: 'ignore',
-    cwd: process.cwd()
-  }).unref();
+if (process.env.NODE_ENV === 'development') {
+  void startWatcher().catch((watcherError) => {
+    console.error(watcherError);
+  });
 }
 
 const nextConfig: NextConfig = {

@@ -1,14 +1,18 @@
-import {execFileSync} from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import {requestManifestBuild} from './layout-watcher.ts';
 import type {TurbopackLoaderContext} from './types.ts';
 
 const CACHE_DIR = path.join(process.cwd(), 'node_modules/.cache/test');
 const POLL_INTERVAL = 20;
 const TIMEOUT = 10000;
-const WATCHER_SCRIPT = path.join(process.cwd(), 'layout-watcher.ts');
 const DEBUG_LOG_PATH = '/tmp/segment-manifest.log';
 const DEBUG_MODE = process.env.SEGMENT_MANIFEST_DEBUG === '1';
+
+type ManifestRequestMessage = {
+  manifestPath: string;
+  type: 'segment-manifest-request';
+};
 
 function logWithTimestamp(scope: string, message: string): void {
   if (!DEBUG_MODE) return;
@@ -46,19 +50,24 @@ function waitForManifest(manifestPath: string): Promise<void> {
 }
 
 function requestManifestGeneration(manifestPath: string): void {
+  const requestMessage: ManifestRequestMessage = {
+    manifestPath,
+    type: 'segment-manifest-request'
+  };
+
   logWithTimestamp('loader', `request generation ${manifestPath}`);
   try {
-    execFileSync(
-      'node',
-      [WATCHER_SCRIPT, '--once', '--manifest', manifestPath],
-      {
-        cwd: process.cwd(),
-        stdio: 'ignore'
-      }
-    );
+    if (typeof process.send === 'function') {
+      process.send(requestMessage);
+      logWithTimestamp('loader', `sent ipc request ${manifestPath}`);
+    } else {
+      logWithTimestamp('loader', `ipc unavailable ${manifestPath}`);
+    }
   } catch (error) {
-    logWithTimestamp('loader', `request generation failed ${String(error)}`);
+    logWithTimestamp('loader', `ipc request failed ${String(error)}`);
   }
+  requestManifestBuild(manifestPath);
+  logWithTimestamp('loader', `direct request ${manifestPath}`);
 }
 
 export default function segmentLoader(
