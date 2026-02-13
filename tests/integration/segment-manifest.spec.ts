@@ -91,7 +91,7 @@ test('Rendering / writes only root manifest', async ({request}) => {
 });
 
 test('Rendering /test writes both manifests', async ({request}) => {
-  await resetManifests();
+  await fs.rm(testManifestPath, {force: true});
 
   const response = await request.get('/test');
   expect(response.ok()).toBe(true);
