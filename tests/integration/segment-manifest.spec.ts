@@ -1,4 +1,5 @@
 import {expect, test} from '@playwright/test';
+import type {Page} from '@playwright/test';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -53,6 +54,24 @@ async function readManifest(manifestPath: string): Promise<SegmentManifest | nul
   return null;
 }
 
+function parseManifestSource(manifestSource: string): SegmentManifest | null {
+  try {
+    const parsedManifest = JSON.parse(manifestSource) as unknown;
+    if (
+      typeof parsedManifest === 'object' &&
+      parsedManifest !== null &&
+      'files' in parsedManifest &&
+      'segment' in parsedManifest
+    ) {
+      return parsedManifest as SegmentManifest;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
 async function waitForManifest(manifestPath: string): Promise<SegmentManifest> {
   const startTime = Date.now();
   const timeout = 10_000;
@@ -63,6 +82,49 @@ async function waitForManifest(manifestPath: string): Promise<SegmentManifest> {
   }
 
   throw new Error(`Timed out waiting for manifest: ${manifestPath}`);
+}
+
+async function readRenderedManifest(
+  page: Page,
+  segment: string
+): Promise<SegmentManifest | null> {
+  const renderedEntries = await page.locator('pre').allTextContents();
+  for (const renderedEntry of renderedEntries) {
+    const parsedManifest = parseManifestSource(renderedEntry);
+    if (parsedManifest && parsedManifest.segment === segment) return parsedManifest;
+  }
+  return null;
+}
+
+async function waitForRenderedManifest(
+  page: Page,
+  segment: string
+): Promise<SegmentManifest> {
+  const startTime = Date.now();
+  const timeout = 10_000;
+  while (Date.now() - startTime <= timeout) {
+    const manifest = await readRenderedManifest(page, segment);
+    if (manifest) return manifest;
+    await delay(25);
+  }
+
+  throw new Error(`Timed out waiting for rendered manifest: ${segment}`);
+}
+
+async function waitForRenderedManifestUpdate(
+  page: Page,
+  segment: string,
+  previousUpdatedAt: number
+): Promise<SegmentManifest> {
+  const startTime = Date.now();
+  const timeout = 10_000;
+  while (Date.now() - startTime <= timeout) {
+    const manifest = await readRenderedManifest(page, segment);
+    if (manifest && manifest.updatedAt > previousUpdatedAt) return manifest;
+    await delay(25);
+  }
+
+  throw new Error(`Timed out waiting for rendered manifest update: ${segment}`);
 }
 
 test.describe.configure({mode: 'serial'});
@@ -97,4 +159,33 @@ test('Rendering /test writes both manifests', async ({request}) => {
 
   expect(rootManifest.segment).toBe('src/app');
   expect(nestedManifest.segment).toBe('src/app/test');
+});
+
+test('Editing a file updates rendered manifest automatically', async ({page}) => {
+  const componentPath = path.join(process.cwd(), 'src', 'app', 'test', 'Comp.tsx');
+  const originalComponentSource = await fs.readFile(componentPath, 'utf8');
+  const markerText = `Comp manifest marker ${Date.now()}`;
+  const updatedComponentSource = originalComponentSource.replace(
+    '<h1>Comp</h1>',
+    `<h1>${markerText}</h1>`
+  );
+
+  expect(updatedComponentSource).not.toBe(originalComponentSource);
+
+  await page.goto('/test');
+  await expect(page.getByRole('heading', {name: 'Test Page'})).toBeVisible();
+
+  const initialManifest = await waitForRenderedManifest(page, 'src/app/test');
+
+  try {
+    await fs.writeFile(componentPath, updatedComponentSource, 'utf8');
+    const updatedManifest = await waitForRenderedManifestUpdate(
+      page,
+      'src/app/test',
+      initialManifest.updatedAt
+    );
+    expect(updatedManifest.updatedAt).toBeGreaterThan(initialManifest.updatedAt);
+  } finally {
+    await fs.writeFile(componentPath, originalComponentSource, 'utf8');
+  }
 });
