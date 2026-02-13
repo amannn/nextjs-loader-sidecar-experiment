@@ -1,5 +1,4 @@
 import {spawn} from 'child_process';
-import fs from 'fs';
 import path from 'path';
 import type {NextConfig} from 'next';
 
@@ -10,7 +9,6 @@ if (
   !process.env.LAYOUT_WATCHER_STARTED
 ) {
   process.env.LAYOUT_WATCHER_STARTED = '1';
-  if (fs.existsSync(CACHE_DIR)) fs.rmSync(CACHE_DIR, {recursive: true});
   spawn('node', [path.join(process.cwd(), 'layout-watcher.ts')], {
     detached: true,
     stdio: 'ignore',
