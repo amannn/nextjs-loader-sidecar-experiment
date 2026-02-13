@@ -48,10 +48,14 @@ function waitForManifest(manifestPath: string): Promise<void> {
 function requestManifestGeneration(manifestPath: string): void {
   logWithTimestamp('loader', `request generation ${manifestPath}`);
   try {
-    execFileSync('node', [WATCHER_SCRIPT, '--once', '--manifest', manifestPath], {
-      cwd: process.cwd(),
-      stdio: 'ignore'
-    });
+    execFileSync(
+      'node',
+      [WATCHER_SCRIPT, '--once', '--manifest', manifestPath],
+      {
+        cwd: process.cwd(),
+        stdio: 'ignore'
+      }
+    );
   } catch (error) {
     logWithTimestamp('loader', `request generation failed ${String(error)}`);
   }
