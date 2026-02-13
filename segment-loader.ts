@@ -10,6 +10,7 @@ const DEBUG_LOG_PATH = '/tmp/segment-manifest.log';
 const DEBUG_MODE = process.env.SEGMENT_MANIFEST_DEBUG === '1';
 
 type ManifestRequestMessage = {
+  force: boolean;
   manifestPath: string;
   type: 'segment-manifest-request';
 };
@@ -145,6 +146,7 @@ function waitForFreshManifest(
 
 function requestManifestGeneration(manifestPath: string): void {
   const requestMessage: ManifestRequestMessage = {
+    force: true,
     manifestPath,
     type: 'segment-manifest-request'
   };
@@ -172,7 +174,7 @@ export default function segmentLoader(
   const layoutDir = path.dirname(this.resourcePath);
   const segmentDir = path.relative(process.cwd(), layoutDir);
   const manifestPath = path.join(CACHE_DIR, segmentDir, 'manifest.json');
-  if (!isPopulated(manifestPath)) requestManifestGeneration(manifestPath);
+  requestManifestGeneration(manifestPath);
 
   waitForManifest(manifestPath)
     .then(() => {

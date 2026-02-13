@@ -48,6 +48,7 @@ type WatchEvent = {
 };
 
 type ManifestRequestMessage = {
+  force?: boolean;
   manifestPath: string;
   type: 'segment-manifest-request';
 };
@@ -76,9 +77,12 @@ function toPosixPath(filePath: string): string {
 function isManifestRequestMessage(message: unknown): message is ManifestRequestMessage {
   if (!message || typeof message !== 'object') return false;
   const messageRecord = message as Record<string, unknown>;
+  const hasValidForce =
+    !('force' in messageRecord) || typeof messageRecord.force === 'boolean';
   return (
     messageRecord.type === 'segment-manifest-request' &&
-    typeof messageRecord.manifestPath === 'string'
+    typeof messageRecord.manifestPath === 'string' &&
+    hasValidForce
   );
 }
 
@@ -457,10 +461,10 @@ function buildSegmentForId(segmentId: string): void {
   buildSegment(segmentDefinition);
 }
 
-function processManifestRequest(manifestPath: string): void {
+function processManifestRequest(manifestPath: string, forceBuild = false): void {
   const normalizedManifestPath = normalizeFilePath(manifestPath);
   if (path.basename(normalizedManifestPath) !== 'manifest.json') return;
-  if (!isManifestRequest(normalizedManifestPath)) return;
+  if (!forceBuild && !isManifestRequest(normalizedManifestPath)) return;
   const segmentId = getSegmentIdFromManifestPath(normalizedManifestPath);
   if (!segmentId) return;
   logWithTimestamp('watcher', `process request ${normalizedManifestPath}`);
@@ -468,7 +472,7 @@ function processManifestRequest(manifestPath: string): void {
 }
 
 export function requestManifestBuild(manifestPath: string): void {
-  processManifestRequest(manifestPath);
+  processManifestRequest(manifestPath, true);
 }
 
 function processPendingManifestRequests(): void {
@@ -543,7 +547,7 @@ function bindIpcListener(): void {
   process.on('message', (message: unknown) => {
     if (!isManifestRequestMessage(message)) return;
     logWithTimestamp('watcher', `ipc request ${message.manifestPath}`);
-    processManifestRequest(message.manifestPath);
+    processManifestRequest(message.manifestPath, message.force === true);
   });
 }
 
