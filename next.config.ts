@@ -1,16 +1,12 @@
 import {spawn} from 'child_process';
-import fs from 'fs';
 import path from 'path';
 import type {NextConfig} from 'next';
-
-const CACHE_DIR = path.join(process.cwd(), 'node_modules/.cache/test');
 
 if (
   process.env.NODE_ENV === 'development' &&
   !process.env.LAYOUT_WATCHER_STARTED
 ) {
   process.env.LAYOUT_WATCHER_STARTED = '1';
-  if (fs.existsSync(CACHE_DIR)) fs.rmSync(CACHE_DIR, {recursive: true});
   spawn('node', [path.join(process.cwd(), 'layout-watcher.ts')], {
     detached: true,
     stdio: 'ignore',
@@ -21,10 +17,10 @@ if (
 const nextConfig: NextConfig = {
   turbopack: {
     rules: {
-      'layout.tsx': {
+      '**/layout.tsx': {
         loaders: [
           {
-            loader: './layout-loader.ts'
+            loader: './segment-loader.ts'
           }
         ]
       }
