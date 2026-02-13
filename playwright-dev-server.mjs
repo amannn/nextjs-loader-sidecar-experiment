@@ -9,10 +9,14 @@ const startupMarkerPath = path.join(cacheDir, 'startup-stale-marker.txt');
 fs.mkdirSync(cacheDir, {recursive: true});
 fs.writeFileSync(startupMarkerPath, `stale:${Date.now()}\n`, 'utf8');
 
-const devProcess = spawn('pnpm', ['dev', '--port', devPort], {
+const devProcess = spawn(
+  'pnpm',
+  ['exec', 'next', 'dev', '--turbopack', '--port', devPort],
+  {
   shell: process.platform === 'win32',
   stdio: 'inherit'
-});
+  }
+);
 
 process.on('SIGINT', () => {
   devProcess.kill('SIGINT');
