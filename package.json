@@ -5,9 +5,8 @@
   "scripts": {
     "build": "next build",
     "dev": "next dev",
-    "dev:integration": "node ./playwright-dev-server.mjs",
     "start": "next start",
-    "test:integration": "playwright test"
+    "test:integration": "rm -rf .next && mkdir -p node_modules/.cache/test && printf 'stale\\n' > node_modules/.cache/test/preexisting-stale.txt && playwright test"
   },
   "dependencies": {
     "@parcel/watcher": "^2.5.6",

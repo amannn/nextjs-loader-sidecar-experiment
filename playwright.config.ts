@@ -10,7 +10,7 @@ export default defineConfig({
     trace: 'on-first-retry'
   },
   webServer: {
-    command: 'pnpm dev:integration',
+    command: 'pnpm dev -- --turbopack --port 3100',
     port: 3100,
     reuseExistingServer: false,
     timeout: 120_000

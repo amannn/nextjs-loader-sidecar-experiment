@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 const cacheDir = path.join(process.cwd(), 'node_modules', '.cache', 'test');
-const startupMarkerPath = path.join(cacheDir, 'startup-stale-marker.txt');
+const staleFilePath = path.join(cacheDir, 'preexisting-stale.txt');
 const rootManifestPath = path.join(cacheDir, 'src', 'app', 'manifest.json');
 const testManifestPath = path.join(cacheDir, 'src', 'app', 'test', 'manifest.json');
 
@@ -67,8 +67,8 @@ async function waitForManifest(manifestPath: string): Promise<SegmentManifest> {
 
 test.describe.configure({mode: 'serial'});
 
-test('Dev startup clears cache marker', async () => {
-  expect(await fileExists(startupMarkerPath)).toBe(false);
+test('Dev startup clears cache folder', async () => {
+  expect(await fileExists(staleFilePath)).toBe(false);
 });
 
 test('Rendering / writes only root manifest', async ({request}) => {
