@@ -82,6 +82,7 @@ export default function segmentLoader(
 
   waitForManifest(manifestPath)
     .then(() => {
+      this.addDependency(manifestPath);
       const manifestSource = fs.readFileSync(manifestPath, 'utf8');
       const result = source.replace(
         '  {children}',
