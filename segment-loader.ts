@@ -14,6 +14,12 @@ type ManifestRequestMessage = {
   type: 'segment-manifest-request';
 };
 
+function toImportPath(fromDirectory: string, filePath: string): string {
+  const relativePath = path.relative(fromDirectory, filePath).replace(/\\/g, '/');
+  if (relativePath.startsWith('.')) return relativePath;
+  return `./${relativePath}`;
+}
+
 function logWithTimestamp(scope: string, message: string): void {
   if (!DEBUG_MODE) return;
   fs.appendFileSync(
@@ -78,16 +84,17 @@ export default function segmentLoader(
   const layoutDir = path.dirname(this.resourcePath);
   const segmentDir = path.relative(process.cwd(), layoutDir);
   const manifestPath = path.join(CACHE_DIR, segmentDir, 'manifest.json');
+  const manifestImportPath = toImportPath(layoutDir, manifestPath);
   if (!isPopulated(manifestPath)) requestManifestGeneration(manifestPath);
 
   waitForManifest(manifestPath)
     .then(() => {
       this.addDependency(manifestPath);
-      const manifestSource = fs.readFileSync(manifestPath, 'utf8');
-      const result = source.replace(
+      const renderSource = source.replace(
         '  {children}',
-        `<pre>{\`${manifestSource}\`}</pre>{children}`
+        '  <pre>{JSON.stringify(__segmentManifest, null, 2)}</pre>{children}'
       );
+      const result = `import __segmentManifest from '${manifestImportPath}';\n${renderSource}`;
       logWithTimestamp('loader', `manifest ready ${manifestPath}`);
       callback(null, result);
     })
